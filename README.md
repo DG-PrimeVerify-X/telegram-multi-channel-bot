@@ -1,14 +1,5 @@
-# Telegram Multi-Channel Bot
+# Telegram Multi-Channel Bot — Owner GUI v1
 
-Starter architecture for:
-- Owner/Admin GUI
-- Multi-channel management
-- Join-request auto-accept
-- Auto-DM content
-- Broadcast
-- User tracking
-- Telegram-supported media/content
-- Custom/Premium Emoji preservation via Telegram message copy/source references
-- Channel-specific settings
+Milestone 1: working Owner Panel with inline buttons.
 
-The bot token is intentionally not included. Configure it through `.env`.
+Requirements: aiogram 3.x, aiosqlite, python-dotenv.
