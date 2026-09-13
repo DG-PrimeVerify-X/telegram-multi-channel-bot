@@ -17,6 +17,14 @@ CREATE TABLE IF NOT EXISTS admins (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS admin_permissions (
+    user_id INTEGER NOT NULL,
+    permission TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, permission),
+    FOREIGN KEY (user_id) REFERENCES admins(user_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS channels (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id INTEGER UNIQUE NOT NULL,

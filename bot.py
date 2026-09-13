@@ -4,10 +4,12 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import BOT_TOKEN, OWNER_ID
 from database.models import init_db
 from handlers.owner import router as owner_router
+from handlers.admin import router as admin_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +28,8 @@ async def main():
         token=BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(admin_router)
     dp.include_router(owner_router)
 
     me = await bot.get_me()

@@ -15,18 +15,15 @@ async def start(message: Message):
     if not is_owner(message.from_user.id):
         await message.answer("⛔ Access denied.")
         return
-
     await message.answer(
-        "👑 <b>OWNER PANEL</b>\n\n"
-        "Welcome. Choose an option below:",
+        "👑 <b>OWNER PANEL</b>\n\nWelcome. Choose an option below:",
         reply_markup=owner_panel(),
     )
 
 @router.callback_query(F.data == "owner:home")
 async def home(callback: CallbackQuery):
     if not is_owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True)
-        return
+        await callback.answer("Access denied.", show_alert=True); return
     await callback.message.edit_text(
         "👑 <b>OWNER PANEL</b>\n\nChoose an option below:",
         reply_markup=owner_panel(),
@@ -36,13 +33,12 @@ async def home(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("owner:"))
 async def section(callback: CallbackQuery):
     if not is_owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True)
-        return
-
+        await callback.answer("Access denied.", show_alert=True); return
     section_name = callback.data.split(":", 1)[1]
+    if section_name == "admins":
+        return
     titles = {
         "channels": "📢 <b>CHANNELS</b>\n\nChannel management module will be connected next.",
-        "admins": "👥 <b>ADMINS</b>\n\nAdmin management module will be connected next.",
         "users": "👤 <b>USERS</b>\n\nUser management module will be connected next.",
         "content": "📁 <b>CONTENT / FILES</b>\n\nContent manager will be connected next.",
         "broadcast": "📣 <b>BROADCAST</b>\n\nBroadcast manager will be connected next.",
