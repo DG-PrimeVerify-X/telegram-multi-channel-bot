@@ -1,0 +1,5 @@
+aiogram>=3,<4
+aiosqlite
+python-dotenv
+APScheduler>=3,<4
+aiohttp
