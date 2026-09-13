@@ -1,205 +1,81 @@
-import aiosqlite
-from aiogram import Router, F
+from aiogram import Router,F
+from aiogram.types import Message,CallbackQuery
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
-from aiogram.filters import StateFilter
+from utils.keyboards import admin_channel_panel
+from utils.states import AdminContent,AdminBroadcast
+from services.broadcast_service import copy_broadcast
+router=Router()
 
-from config import OWNER_ID
-from database.models import DB_PATH
-from utils.keyboards import admin_menu, admin_list_buttons, admin_actions, permission_buttons, PERMISSIONS
-from utils.states import AdminAddState
+@router.callback_query(F.data=="admin:menu")
+async def admin_menu(c:CallbackQuery,db):
+    if not await db.is_admin(c.from_user.id): return await c.answer("Access denied",show_alert=True)
+    await c.message.edit_text("🛡️ <b>ADMIN PANEL</b>\n\nChoose an option:",reply_markup=admin_channel_panel()); await c.answer()
 
-router = Router()
+@router.callback_query(F.data=="ach:list")
+async def my_channels(c:CallbackQuery,db):
+    rows=await db.get_admin_channels(c.from_user.id)
+    txt="📋 <b>MY CHANNELS</b>\n\n"+"\n".join(f"• {r['title']} — <code>{r['chat_id']}</code>" for r in rows) or "No channels assigned."
+    await c.message.edit_text(txt,reply_markup=admin_channel_panel()); await c.answer()
 
-def owner(user_id: int) -> bool:
-    return user_id == OWNER_ID
+@router.callback_query(F.data=="ach:content")
+async def ach_content(c:CallbackQuery,db):
+    if not await db.has_permission(c.from_user.id,"content"): return await c.answer("No permission",show_alert=True)
+    rows=await db.get_admin_channels(c.from_user.id)
+    from aiogram.types import InlineKeyboardMarkup,InlineKeyboardButton
+    buttons=[[InlineKeyboardButton(text=f"📁 {r['title']}",callback_data=f"admincontent:{r['chat_id']}")] for r in rows]
+    buttons.append([InlineKeyboardButton(text="⬅️ Back",callback_data="admin:menu")])
+    await c.message.edit_text("📁 Select an assigned channel:",reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)); await c.answer()
 
-async def get_admins():
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT user_id, username, full_name, is_active FROM admins ORDER BY created_at DESC"
-        )
-        return await cur.fetchall()
+@router.callback_query(F.data.startswith("admincontent:"))
+async def admin_content_start(c:CallbackQuery,state:FSMContext,db):
+    cid=int(c.data.split(":")[1])
+    allowed=[r["chat_id"] for r in await db.get_admin_channels(c.from_user.id)]
+    if cid not in allowed: return await c.answer("Channel not assigned",show_alert=True)
+    await state.update_data(chat_id=cid); await state.set_state(AdminContent.waiting_message)
+    await c.message.edit_text("📁 Send the message/file to save for this channel's auto-DM.")
+    await c.answer()
 
-async def get_admin(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT user_id, username, full_name, is_active, created_at FROM admins WHERE user_id=?",
-            (user_id,)
-        )
-        return await cur.fetchone()
+@router.message(AdminContent.waiting_message)
+async def admin_content_capture(m:Message,state:FSMContext):
+    await state.update_data(source_chat_id=m.chat.id,source_message_id=m.message_id)
+    await state.set_state(AdminContent.waiting_title)
+    await m.answer("Give this content a title.")
 
-async def get_permissions(user_id: int):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT permission FROM admin_permissions WHERE user_id=? AND enabled=1",
-            (user_id,)
-        )
-        return {r[0] for r in await cur.fetchall()}
+@router.message(AdminContent.waiting_title)
+async def admin_content_title(m:Message,db,state:FSMContext):
+    d=await state.get_data()
+    item=await db.add_content(m.from_user.id,m.text.strip()[:120],d["source_chat_id"],d["source_message_id"])
+    await db.attach_content(d["chat_id"],item)
+    await db.log(m.from_user.id,"admin_add_content",f"channel={d['chat_id']}, content={item}")
+    await state.clear(); await m.answer("✅ Content saved and attached to the channel.",reply_markup=admin_channel_panel())
 
-@router.callback_query(F.data == "owner:admins")
-async def open_admins(callback: CallbackQuery):
-    if not owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True)
-        return
-    await callback.message.edit_text(
-        "👥 <b>ADMIN MANAGEMENT</b>\n\nManage admins and their permissions.",
-        reply_markup=admin_menu()
-    )
-    await callback.answer()
+@router.callback_query(F.data=="ach:broadcast")
+async def ach_broadcast(c:CallbackQuery,db):
+    if not await db.has_permission(c.from_user.id,"broadcast"): return await c.answer("No permission",show_alert=True)
+    rows=await db.get_admin_channels(c.from_user.id)
+    from aiogram.types import InlineKeyboardMarkup,InlineKeyboardButton
+    buttons=[[InlineKeyboardButton(text=f"📣 {r['title']}",callback_data=f"adminbroadcast:{r['chat_id']}")] for r in rows]
+    buttons.append([InlineKeyboardButton(text="⬅️ Back",callback_data="admin:menu")])
+    await c.message.edit_text("📣 Select channel audience:",reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)); await c.answer()
 
-@router.callback_query(F.data == "admin:menu")
-async def admin_home(callback: CallbackQuery):
-    if not owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True); return
-    await callback.message.edit_text(
-        "👥 <b>ADMIN MANAGEMENT</b>\n\nChoose an option:",
-        reply_markup=admin_menu()
-    )
-    await callback.answer()
+@router.callback_query(F.data.startswith("adminbroadcast:"))
+async def admin_broadcast_start(c:CallbackQuery,state:FSMContext,db):
+    cid=int(c.data.split(":")[1])
+    allowed=[r["chat_id"] for r in await db.get_admin_channels(c.from_user.id)]
+    if cid not in allowed: return await c.answer("Channel not assigned",show_alert=True)
+    await state.update_data(chat_id=cid); await state.set_state(AdminBroadcast.waiting_message)
+    await c.message.edit_text("📣 Send the message/media to broadcast to tracked members of this channel."); await c.answer()
 
-@router.callback_query(F.data == "admin:list")
-async def admin_list(callback: CallbackQuery):
-    if not owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True); return
-    admins = await get_admins()
-    if not admins:
-        text = "👥 <b>ADMIN LIST</b>\n\nNo admins added yet."
-    else:
-        text = "👥 <b>ADMIN LIST</b>\n\nSelect an admin:"
-    await callback.message.edit_text(text, reply_markup=admin_list_buttons(admins))
-    await callback.answer()
+@router.message(AdminBroadcast.waiting_message)
+async def admin_broadcast(m:Message,bot,db,state:FSMContext):
+    d=await state.get_data(); users=await db.channel_users(d["chat_id"])
+    await m.answer(f"📣 Broadcasting to {len(users)} tracked channel members...")
+    sent,failed=await copy_broadcast(bot,db,m.from_user.id,m.chat.id,m.message_id,[u["user_id"] for u in users],label="admin_broadcast")
+    await state.clear(); await m.answer(f"✅ Done. Sent: {sent} | Failed: {failed}",reply_markup=admin_channel_panel())
 
-@router.callback_query(F.data == "admin:add")
-async def add_start(callback: CallbackQuery, state: FSMContext):
-    if not owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True); return
-    await state.set_state(AdminAddState.waiting_for_user)
-    await callback.message.edit_text(
-        "➕ <b>ADD ADMIN</b>\n\n"
-        "Forward any message from the person you want to add.\n"
-        "Telegram will use the forwarded sender ID when available.\n\n"
-        "Send /cancel to stop."
-    )
-    await callback.answer()
-
-@router.message(StateFilter(AdminAddState.waiting_for_user))
-async def add_receive(message: Message, state: FSMContext):
-    if not owner(message.from_user.id):
-        return
-    if message.text and message.text.lower() == "/cancel":
-        await state.clear()
-        await message.answer("Cancelled.", reply_markup=admin_menu())
-        return
-
-    user_id = None
-    username = None
-    full_name = None
-
-    origin = getattr(message, "forward_origin", None)
-    sender_user = getattr(origin, "sender_user", None) if origin else None
-    if sender_user:
-        user_id = sender_user.id
-        username = sender_user.username
-        full_name = sender_user.full_name
-
-    if user_id is None and message.from_user and message.from_user.id != OWNER_ID:
-        # A direct message from the owner cannot reveal another user's ID;
-        # forwarding is the reliable GUI route.
-        await message.answer(
-            "⚠️ Please <b>forward a message from the user</b> you want to add, "
-            "then send it again."
-        )
-        return
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT OR REPLACE INTO admins(user_id, username, full_name, is_active) VALUES(?,?,?,1)",
-            (user_id, username, full_name)
-        )
-        await db.commit()
-    await state.clear()
-    await message.answer(
-        f"✅ Admin added.\nUser ID: <code>{user_id}</code>",
-        reply_markup=admin_menu()
-    )
-
-@router.callback_query(F.data.startswith("admin:view:"))
-async def view_admin(callback: CallbackQuery):
-    if not owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True); return
-    user_id = int(callback.data.split(":")[2])
-    a = await get_admin(user_id)
-    if not a:
-        await callback.answer("Admin not found.", show_alert=True); return
-    perms = await get_permissions(user_id)
-    perm_text = ", ".join(p for k, p in PERMISSIONS if k in perms) or "None"
-    name = a[2] or a[1] or str(user_id)
-    text = (
-        f"👤 <b>{name}</b>\n"
-        f"ID: <code>{user_id}</code>\n"
-        f"Status: {'🟢 Active' if a[3] else '🔴 Disabled'}\n\n"
-        f"Permissions: {perm_text}"
-    )
-    await callback.message.edit_text(text, reply_markup=admin_actions(user_id))
-    await callback.answer()
-
-@router.callback_query(F.data == "admin:permissions")
-async def permissions_menu(callback: CallbackQuery):
-    if not owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True); return
-    admins = await get_admins()
-    await callback.message.edit_text(
-        "🔐 <b>PERMISSIONS</b>\n\nSelect an admin:",
-        reply_markup=admin_list_buttons(admins)
-    )
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("admin:perms:"))
-async def permissions(callback: CallbackQuery):
-    if not owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True); return
-    user_id = int(callback.data.split(":")[2])
-    perms = await get_permissions(user_id)
-    await callback.message.edit_text(
-        f"🔐 <b>PERMISSIONS</b>\n\nAdmin: <code>{user_id}</code>",
-        reply_markup=permission_buttons(user_id, perms)
-    )
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("admin:toggle:"))
-async def toggle_permission(callback: CallbackQuery):
-    if not owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True); return
-    _, _, uid, permission = callback.data.split(":")
-    user_id = int(uid)
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute(
-            "SELECT enabled FROM admin_permissions WHERE user_id=? AND permission=?",
-            (user_id, permission)
-        )
-        row = await cur.fetchone()
-        new_value = 0 if row and row[0] else 1
-        await db.execute(
-            "INSERT INTO admin_permissions(user_id, permission, enabled) VALUES(?,?,?) "
-            "ON CONFLICT(user_id, permission) DO UPDATE SET enabled=excluded.enabled",
-            (user_id, permission, new_value)
-        )
-        await db.commit()
-    perms = await get_permissions(user_id)
-    await callback.message.edit_reply_markup(reply_markup=permission_buttons(user_id, perms))
-    await callback.answer("Updated.")
-
-@router.callback_query(F.data.startswith("admin:remove:"))
-async def remove_admin(callback: CallbackQuery):
-    if not owner(callback.from_user.id):
-        await callback.answer("Access denied.", show_alert=True); return
-    user_id = int(callback.data.split(":")[2])
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM admins WHERE user_id=?", (user_id,))
-        await db.commit()
-    await callback.message.edit_text(
-        "✅ Admin removed.",
-        reply_markup=admin_menu()
-    )
-    await callback.answer()
+@router.callback_query(F.data=="ach:stats")
+async def ach_stats(c:CallbackQuery,db):
+    rows=await db.get_admin_channels(c.from_user.id)
+    total=0
+    for r in rows: total += len(await db.channel_users(r["chat_id"]))
+    await c.message.edit_text(f"📊 <b>MY STATISTICS</b>\n\nChannels: {len(rows)}\nChannel members tracked: {total}",reply_markup=admin_channel_panel()); await c.answer()
